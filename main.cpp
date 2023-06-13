@@ -1,132 +1,112 @@
 #include <iostream>
 #include <vector>
 #include <queue>
+#include <limits>
 #include <chrono>
 using namespace std;
 using namespace std::chrono;
 
 // Structure to represent an edge in the graph
 struct Edge {
-    int source, destination, capacity, flow;
+    int destination;
+    int capacity;
+    int flow;
+    int reverseEdge;
 
-    Edge(int s, int d, int c)
+    Edge(int d, int c)
     {
-        source = s;
         destination = d;
         capacity = c;
         flow = 0;
+        reverseEdge = -1;
     }
 };
 
 // Class to represent the graph
 class Graph {
     int numVertices;
-    vector<Edge> edges;
-    vector<int> heights, excessFlows, labels;
-    vector<vector<int>> residualCapacity;
+    vector<vector<Edge>> adjacencyList;
+    vector<int> level;
 
 public:
     Graph(int V)
     {
         numVertices = V;
-        heights.resize(numVertices, 0);
-        excessFlows.resize(numVertices, 0);
-        labels.resize(numVertices, 0);
-        residualCapacity.resize(numVertices, vector<int>(numVertices, 0));
+        adjacencyList.resize(numVertices);
+        level.resize(numVertices);
     }
 
     // Function to add an edge to the graph
     void addEdge(int source, int destination, int capacity)
     {
-        // Adding forward edge
-        edges.push_back(Edge(source, destination, capacity));
-        residualCapacity[source][destination] = capacity;
+        adjacencyList[source].push_back(Edge(destination, capacity));
+        adjacencyList[destination].push_back(Edge(source, 0));
 
-        // Adding backward edge
-        edges.push_back(Edge(destination, source, 0));
-        residualCapacity[destination][source] = 0;
+        int sourceSize = adjacencyList[source].size();
+        int destinationSize = adjacencyList[destination].size();
+
+        adjacencyList[source][sourceSize - 1].reverseEdge = destinationSize - 1;
+        adjacencyList[destination][destinationSize - 1].reverseEdge = sourceSize - 1;
     }
 
-    // Function to initialize preflow
-    void initializePreflow(int source)
+    // Function to perform Breadth-First Search to compute levels of nodes
+    bool bfs(int source, int sink)
     {
-        heights[source] = numVertices;
+        fill(level.begin(), level.end(), -1);
+        level[source] = 0;
 
-        for (int i = 0; i < numVertices; i++) {
-            if (i != source) {
-                excessFlows[i] = 0;
-                labels[i] = 0;
-            }
-        }
+        queue<int> q;
+        q.push(source);
 
-        for (auto& edge : edges) {
-            if (edge.source == source) {
-                edge.flow = edge.capacity;
-                residualCapacity[edge.source][edge.destination] = 0;
-                residualCapacity[edge.destination][edge.source] = edge.capacity;
-                excessFlows[edge.destination] = edge.capacity;
-            }
-        }
-    }
+        while (!q.empty()) {
+            int currentVertex = q.front();
+            q.pop();
 
-    // Function to relabel a vertex
-    void relabelVertex(int vertex)
-    {
-        int minHeight = INT_MAX;
-
-        for (int i = 0; i < numVertices; i++) {
-            if (residualCapacity[vertex][i] > 0)
-                minHeight = min(minHeight, heights[i]);
-        }
-
-        heights[vertex] = minHeight + 1;
-    }
-
-    // Function to discharge excess flow from a vertex
-    void discharge(int vertex)
-    {
-        while (excessFlows[vertex] > 0) {
-            if (labels[vertex] < numVertices) {
-                int nextVertex = labels[vertex];
-                if (residualCapacity[vertex][nextVertex] > 0 &&
-                    heights[vertex] == heights[nextVertex] + 1) {
-                    int flow = min(excessFlows[vertex], residualCapacity[vertex][nextVertex]);
-                    excessFlows[vertex] -= flow;
-                    excessFlows[nextVertex] += flow;
-                    residualCapacity[vertex][nextVertex] -= flow;
-                    residualCapacity[nextVertex][vertex] += flow;
-                }
-                else {
-                    labels[vertex]++;
+            for (const Edge& edge : adjacencyList[currentVertex]) {
+                if (level[edge.destination] < 0 && edge.flow < edge.capacity) {
+                    level[edge.destination] = level[currentVertex] + 1;
+                    q.push(edge.destination);
                 }
             }
-            else {
-                relabelVertex(vertex);
-                labels[vertex] = 0;
-            }
         }
+
+        return level[sink] >= 0;
     }
 
-    // Function to compute maximum flow using Push-Relabel algorithm
-    int pushRelabelMaxFlow(int source, int sink)
+    // Function to perform Depth-First Search to find augmenting paths
+    int dfs(int currentVertex, int sink, int currentFlow)
     {
-        initializePreflow(source);
+        if (currentVertex == sink)
+            return currentFlow;
 
-        queue<int> activeVertices;
-        for (int i = 0; i < numVertices; i++) {
-            if (i != source && i != sink)
-                activeVertices.push(i);
+        for (Edge& edge : adjacencyList[currentVertex]) {
+            if (level[edge.destination] == level[currentVertex] + 1 && edge.flow < edge.capacity) {
+                int minFlow = min(currentFlow, edge.capacity - edge.flow);
+                int bottleneckFlow = dfs(edge.destination, sink, minFlow);
+
+                if (bottleneckFlow > 0) {
+                    edge.flow += bottleneckFlow;
+                    adjacencyList[edge.destination][edge.reverseEdge].flow -= bottleneckFlow;
+                    return bottleneckFlow;
+                }
+            }
         }
+
+        return 0;
+    }
+
+    // Function to compute maximum flow using Dinic's algorithm
+    int dinicMaxFlow(int source, int sink)
+    {
+        int maxFlow = 0;
 
         high_resolution_clock::time_point startTime = high_resolution_clock::now();
 
-        while (!activeVertices.empty()) {
-            int vertex = activeVertices.front();
-            int oldHeight = heights[vertex];
-            discharge(vertex);
-            if (heights[vertex] > oldHeight)
-                activeVertices.push(vertex);
-            activeVertices.pop();
+        while (bfs(source, sink)) {
+            int currentFlow;
+            while ((currentFlow = dfs(source, sink, numeric_limits<int>::max())) > 0) {
+                maxFlow += currentFlow;
+            }
         }
 
         high_resolution_clock::time_point endTime = high_resolution_clock::now();
@@ -134,7 +114,7 @@ public:
 
         cout << "Runtime: " << duration << " microseconds" << endl;
 
-        return excessFlows[sink];
+        return maxFlow;
     }
 };
 
@@ -158,8 +138,9 @@ int main()
     int source = 0;
     int sink = 5;
 
-    int maxFlow = graph.pushRelabelMaxFlow(source, sink);
+    int maxFlow = graph.dinicMaxFlow(source, sink);
     cout << "Maximum flow: " << maxFlow << endl;
 
     return 0;
 }
+
